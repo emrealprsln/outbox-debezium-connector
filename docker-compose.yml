@@ -1,0 +1,220 @@
+services:
+  postgres:
+    image: postgres:16.1-alpine
+    container_name: postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: password
+      POSTGRES_USER: user
+      POSTGRES_DB: application
+    command:
+      - "postgres"
+      - "-c"
+      - "wal_level=logical"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-volume:/var/lib/postgresql/data
+    networks:
+      - network-application
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.1
+    hostname: zookeeper
+    container_name: zookeeper
+    restart: unless-stopped
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    healthcheck:
+      test: echo stat | nc localhost 2181
+      interval: 10s
+      timeout: 10s
+      retries: 3
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+      - zookeeper-log:/var/lib/zookeeper/log
+      - zookeeper-secrets:/etc/zookeeper/secrets
+    networks:
+      - network-application
+
+  broker-1:
+    image: confluentinc/cp-kafka:7.5.1
+    hostname: broker
+    container_name: broker-1
+    restart: unless-stopped
+    depends_on:
+      - zookeeper
+    ports:
+      - "29091:29091"
+      - "9091:9091"
+      - "19101:19101"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker-1:29091,PLAINTEXT_HOST://localhost:9091
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 3
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_JMX_PORT: 19101
+      KAFKA_JMX_HOSTNAME: localhost
+    healthcheck:
+      test: nc -vz localhost 9091
+      interval: 10s
+      timeout: 10s
+      retries: 3
+    volumes:
+      - broker1-data:/var/lib/kafka/data
+      - broker1-secrets:/etc/kafka/secrets
+    networks:
+      - network-application
+
+  broker-2:
+    image: confluentinc/cp-kafka:7.5.1
+    hostname: broker
+    container_name: broker-2
+    restart: unless-stopped
+    depends_on:
+      - zookeeper
+    ports:
+      - "29092:29092"
+      - "9092:9092"
+      - "19102:19102"
+    environment:
+      KAFKA_BROKER_ID: 2
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker-2:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 3
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_JMX_PORT: 19102
+      KAFKA_JMX_HOSTNAME: localhost
+    healthcheck:
+      test: nc -vz localhost 9092
+      interval: 10s
+      timeout: 10s
+      retries: 3
+    volumes:
+      - broker2-data:/var/lib/kafka/data
+      - broker2-secrets:/etc/kafka/secrets
+    networks:
+      - network-application
+
+  broker-3:
+    image: confluentinc/cp-kafka:7.5.1
+    hostname: broker
+    container_name: broker-3
+    restart: unless-stopped
+    depends_on:
+      - zookeeper
+    ports:
+      - "29093:29093"
+      - "9093:9093"
+      - "19103:19103"
+    environment:
+      KAFKA_BROKER_ID: 3
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker-3:29093,PLAINTEXT_HOST://localhost:9093
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 3
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_JMX_PORT: 19103
+      KAFKA_JMX_HOSTNAME: localhost
+    healthcheck:
+      test: nc -vz localhost 9093
+      interval: 10s
+      timeout: 10s
+      retries: 3
+    volumes:
+      - broker3-data:/var/lib/kafka/data
+      - broker3-secrets:/etc/kafka/secrets
+    networks:
+      - network-application
+
+  kafka-ui:
+    container_name: kafka-ui
+    image: provectuslabs/kafka-ui:latest
+    restart: unless-stopped
+    depends_on:
+      - broker-1
+      - broker-2
+      - broker-3
+    ports:
+      - "8081:8080"
+    environment:
+      DYNAMIC_CONFIG_ENABLED: 'true'
+      KAFKA_CLUSTERS_0_NAME: application_cluster
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: broker-1:29091,broker-2:29092,broker-3:29093
+    networks:
+      - network-application
+
+  debezium:
+    image: debezium/connect:latest
+    restart: unless-stopped
+    container_name: debezium
+    hostname: debezium
+    platform: linux/x86_64
+    ports:
+      - '8083:8083'
+    environment:
+      BOOTSTRAP_SERVERS: broker-1:29091,broker-2:29092,broker-3:29093
+      GROUP_ID: 1
+      CONFIG_STORAGE_TOPIC: debezium.connect.config
+      STATUS_STORAGE_TOPIC: debezium.connect.statuses
+      OFFSET_STORAGE_TOPIC: debezium.connect.offsets
+      ENABLE_DEBEZIUM_SCRIPTING: 'true'
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'curl',
+          '--silent',
+          '--fail',
+          '-X',
+          'GET',
+          'http://localhost:8083/connectors',
+        ]
+      start_period: 10s
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - debezium-data:/kafka/connect
+    networks:
+      - network-application
+
+  debezium-ui:
+    image: debezium/debezium-ui:latest
+    platform: linux/x86_64
+    restart: unless-stopped
+    container_name: debezium-ui
+    hostname: debezium-ui
+    depends_on:
+      debezium:
+        condition: service_healthy
+    ports:
+      - '8082:8080'
+    environment:
+      KAFKA_CONNECT_URIS: http://debezium:8083
+    networks:
+      - network-application
+
+networks:
+  network-application:
+    name: network-application
+    driver: bridge
+
+volumes:
+  postgres-volume:
+  broker1-data:
+  broker1-secrets:
+  broker2-data:
+  broker2-secrets:
+  broker3-data:
+  broker3-secrets:
+  zookeeper-data:
+  zookeeper-log:
+  zookeeper-secrets:
+  debezium-data:
